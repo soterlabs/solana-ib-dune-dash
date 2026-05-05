@@ -19,7 +19,10 @@ The flagship Morpho-vault calc (`bal × vault_usds × apr × duration / total_su
 | Query | ID | Purpose |
 |---|---|---|
 | **SSR Rate History** | [7425009](https://dune.com/queries/7425009) | sUSDS `file()` rate boundaries from `ethereum.traces` → `(effective_date, rate_per_second_ray, ssr_apy)`. Sparse (rate-change days only). |
-| **USDS Solana Boost — compare** | [7429781](https://dune.com/queries/7429781) | Per-hour TWAP balances × intra-day SSR APY × linear formula, vs historical actuals. 6-week back-test. |
+| **Boost — current + past week** | [7433459](https://dune.com/queries/7433459) | Per-partner boost for the most recent fully-completed Mon→Sun UTC week and the in-progress current week (sum over completed hours only). Dynamic dates. |
+| **Boost — weekly history** | [7429781](https://dune.com/queries/7429781) | Per-partner weekly boost over the rolling 12 most recently completed weeks. Dynamic dates. No actuals comparison (see KEEL.md for the back-test that validated this methodology). |
+
+The dashboard ([USDS Solana Integration Boost](https://dune.com/soterlabs/usds-solana-integration-boost)) shows current+past week first, then the rolling-12-week history.
 
 ## Partner addresses (USDS-source)
 
@@ -69,14 +72,16 @@ weekly_boost = SUM over 168 hours
 
 ## Validation against historical actuals
 
-6-week back-test (02/23–04/05 2026) results in query 7429781:
+The 14-week back-test (12/29/2025 → 04/05/2026) that validated this methodology has been moved out of the live queries — see [`KEEL.md`](./KEEL.md) for the methodology, what reconciled cleanly, and the open questions for the Keel team. Headline results:
 
 | Partner type | Match quality |
 |---|---|
-| Stable balances (onre_reserve, huma_reserve) | Within ±$0.05 (0.00%) |
-| Most active partners (huma, maple, onre, juplend) | ±0.5% in stable weeks, ±2% in volatile weeks |
-| **kamino (main)** | **−6% to +12%** — most volatile address (8.2M↔14.4M intra-week swings); hourly TWAP misses sub-hour movements |
-| Keel Pioneer | 03/30 (no skipped partners): −4.2%. Earlier weeks (drift/marginfi/solend not subtracted): over-counts by ~$4,500–$5,900 |
+| Stable balances (onre_reserve) | Within ±$0.05 (0.00%) every week |
+| huma / maple | Constant −$15–22/wk under (independent of balance) — likely ~$19–20k of USDS held at addresses we don't track |
+| onre | Constant +$46–52/wk over (independent of balance, scales with rate change) — likely ~$65k of USDS at a sub-account we should exclude |
+| juplend (post-01/26) | −3% to −6%; ~$300/wk absolute, suggests per-block vs per-hour TWAP delta |
+| **kamino (main)** | **−6% to +14%** — most volatile address (8M↔14M intra-week swings); hourly TWAP misses sub-hour movements |
+| Keel Pioneer | Within $84–$1,100 boost-equivalent across all 14 weeks once Sky's tracked-address set delta (juplend pre-01/26, drift/mfi/solend pre-03/30) is modelled in |
 
 ## Reference files outside this repo
 
