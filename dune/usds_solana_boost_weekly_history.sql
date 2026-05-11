@@ -2,15 +2,20 @@
 -- Name: USDS Solana Boost — weekly history
 --
 -- Per-partner weekly USDS Integration Boost over a rolling 12-week window
--- (12 most recently completed Mon→Sun UTC weeks). Methodology mirrors
--- query 7433459 (current + past week):
+-- (12 most recently completed Mon→Sun UTC weeks). Payout per partner =
+-- (SSR-derived boost on USDS balances) + (fixed weekly bonus).
+--
+-- SSR-derived component (mirrors query 7433459):
 --   * Anchor balance from `stablecoins_solana.balances` for the day before
 --     the window start (treated as end-of-day = start-of-window).
---   * Per-hour TWAP balance reconstructed via cumulative USDS transfers.
+--   * Per-hour TWAP balance reconstructed via cumulative USDS transfers
+--     (token_symbol = 'USDS' only — kUSDS shares are excluded).
 --   * Intra-day SSR APY via `ethereum.traces` `file()` calls on the SSR pot,
 --     deduped to last call per day, looked up at hour-start.
 --   * Linear formula:  hourly_boost = balance × ssr_apy / 8760.
 --   * Keel Pioneer = total_solana_usds_supply − Σ tracked_partner_balances.
+-- Fixed bonus component:
+--   * kamino: 50,000 USDS / week.
 
 WITH
 partner_addresses(partner, lookup_address) AS (
@@ -22,6 +27,11 @@ partner_addresses(partner, lookup_address) AS (
     ('juplend',      '7s1da8DduuBFqGra5bJBjpnvL5E9mGzCuMk1Qkh4or2Z'),
     ('onre_reserve', '45YnzauhsBM8CpUz96Djf8UG5vqq2Dua62wuW9H3jaJ5'),
     ('huma_reserve', '6q76D2fJxPqzQQfUBMmkb2MzT4Vg7VGe2dgXHKd33ad2')
+),
+
+partner_weekly_bonus(partner, weekly_bonus) AS (
+  VALUES
+    ('kamino', CAST(50000 AS DOUBLE))
 ),
 
 windows AS (
@@ -164,13 +174,25 @@ hourly_boost AS (
          ah.balance * sh.ssr_apy / 8760.0 AS boost_hour
   FROM all_hourly ah
   JOIN ssr_hourly sh ON sh.hr = ah.hr
+),
+
+weekly_raw AS (
+  SELECT
+    CAST(DATE_TRUNC('week', hb.hr) AS DATE) AS week_start,
+    hb.partner,
+    AVG(hb.balance) AS avg_balance,
+    SUM(hb.boost_hour) AS dune_boost
+  FROM hourly_boost hb
+  GROUP BY 1, 2
 )
 
 SELECT
-  CAST(DATE_TRUNC('week', hb.hr) AS DATE) AS week_start,
-  hb.partner,
-  ROUND(AVG(hb.balance), 2) AS avg_balance,
-  ROUND(SUM(hb.boost_hour), 2) AS dune_boost
-FROM hourly_boost hb
-GROUP BY 1, 2
-ORDER BY 1 DESC, dune_boost DESC NULLS LAST
+  wr.week_start,
+  wr.partner,
+  ROUND(wr.avg_balance, 2)                                    AS avg_balance,
+  ROUND(wr.dune_boost, 2)                                     AS dune_boost,
+  ROUND(COALESCE(b.weekly_bonus, 0), 2)                       AS bonus,
+  ROUND(wr.dune_boost + COALESCE(b.weekly_bonus, 0), 2)       AS total_boost
+FROM weekly_raw wr
+LEFT JOIN partner_weekly_bonus b ON b.partner = wr.partner
+ORDER BY wr.week_start DESC, total_boost DESC NULLS LAST

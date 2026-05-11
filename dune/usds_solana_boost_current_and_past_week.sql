@@ -6,16 +6,21 @@
 --   * current_week     : the in-progress week, from this Monday 00:00 up to the
 --                        most recently completed UTC hour
 --
--- Methodology matches the historical back-test (Dune query 7429781):
+-- Payout per partner = (SSR-derived boost on USDS balances) + (fixed bonus).
+-- Methodology of the SSR-derived component:
 --   * Anchor balance from `stablecoins_solana.balances` for the Sunday before the
 --     past week's Monday (treated as end-of-day = start-of-window).
---   * Per-hour TWAP balance reconstructed via cumulative USDS transfers.
+--   * Per-hour TWAP balance reconstructed via cumulative USDS transfers
+--     (token_symbol = 'USDS' only — kUSDS shares are excluded).
 --   * Intra-day SSR APY via `ethereum.traces` `file()` calls on the SSR pot,
 --     deduped to last call per day, looked up at hour-start.
 --   * Linear formula:  hourly_boost = balance × ssr_apy / 8760.
 --   * Keel Pioneer = total_solana_usds_supply − Σ tracked_partner_balances.
 --     If today's daily balance snapshot hasn't landed yet, the most recent
 --     available day's total supply is used for any NULL hours.
+-- Fixed bonuses (constants, applied separately so payout = boost + bonus):
+--   * kamino: 50,000 USDS / week (pro-rated to hours_counted / 168 for the
+--     in-progress current week).
 
 WITH
 partner_addresses(partner, lookup_address) AS (
@@ -27,6 +32,12 @@ partner_addresses(partner, lookup_address) AS (
     ('juplend',      '7s1da8DduuBFqGra5bJBjpnvL5E9mGzCuMk1Qkh4or2Z'),
     ('onre_reserve', '45YnzauhsBM8CpUz96Djf8UG5vqq2Dua62wuW9H3jaJ5'),
     ('huma_reserve', '6q76D2fJxPqzQQfUBMmkb2MzT4Vg7VGe2dgXHKd33ad2')
+),
+
+-- Fixed weekly bonuses paid on top of the SSR-derived boost.
+partner_weekly_bonus(partner, weekly_bonus) AS (
+  VALUES
+    ('kamino', CAST(50000 AS DOUBLE))
 ),
 
 windows AS (
@@ -207,15 +218,32 @@ windowed AS (
          COUNT(*)        AS hours_counted
   FROM hourly_boost
   GROUP BY 1, 2
+),
+
+windowed_with_bonus AS (
+  SELECT
+    w.partner,
+    w.window_label,
+    w.avg_balance,
+    w.boost,
+    w.hours_counted,
+    -- Pro-rate the fixed weekly bonus by completed hours / 168.
+    COALESCE(b.weekly_bonus, 0) * (w.hours_counted / 168.0) AS bonus
+  FROM windowed w
+  LEFT JOIN partner_weekly_bonus b ON b.partner = w.partner
 )
 
 SELECT
   partner,
-  ROUND(MAX(CASE WHEN window_label = 'past_week'           THEN avg_balance END), 2) AS past_week_avg_balance,
-  ROUND(MAX(CASE WHEN window_label = 'past_week'           THEN boost       END), 2) AS past_week_boost,
-  ROUND(MAX(CASE WHEN window_label = 'current_week_so_far' THEN avg_balance END), 2) AS current_week_avg_balance,
-  ROUND(MAX(CASE WHEN window_label = 'current_week_so_far' THEN boost       END), 2) AS current_week_boost_so_far,
+  ROUND(MAX(CASE WHEN window_label = 'past_week'           THEN avg_balance   END), 2) AS past_week_avg_balance,
+  ROUND(MAX(CASE WHEN window_label = 'past_week'           THEN boost         END), 2) AS past_week_boost,
+  ROUND(MAX(CASE WHEN window_label = 'past_week'           THEN bonus         END), 2) AS past_week_bonus,
+  ROUND(MAX(CASE WHEN window_label = 'past_week'           THEN boost + bonus END), 2) AS past_week_total,
+  ROUND(MAX(CASE WHEN window_label = 'current_week_so_far' THEN avg_balance   END), 2) AS current_week_avg_balance,
+  ROUND(MAX(CASE WHEN window_label = 'current_week_so_far' THEN boost         END), 2) AS current_week_boost_so_far,
+  ROUND(MAX(CASE WHEN window_label = 'current_week_so_far' THEN bonus         END), 2) AS current_week_bonus_so_far,
+  ROUND(MAX(CASE WHEN window_label = 'current_week_so_far' THEN boost + bonus END), 2) AS current_week_total_so_far,
   COALESCE(MAX(CASE WHEN window_label = 'current_week_so_far' THEN hours_counted END), 0) AS current_week_hours
-FROM windowed
+FROM windowed_with_bonus
 GROUP BY partner
-ORDER BY past_week_boost DESC NULLS LAST
+ORDER BY past_week_total DESC NULLS LAST
